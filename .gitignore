@@ -1,0 +1,40 @@
+# ============================================================
+#  Job Letter Verification - settings
+#  IMPORTANT: never upload this file to GitHub (it holds secrets)
+#  Tip: use forward slashes (/) in Windows paths
+# ============================================================
+
+# ---------- General ----------
+APP_ENV=development
+MAX_UPLOAD_MB=10
+
+# ---------- Storage (relative to the project folder) ----------
+UPLOAD_DIR=storage/uploads
+DB_PATH=storage/job_letter.db
+RULES_PATH=rules/job_letter_rules_v1.json
+
+# ---------- Sagicor Bank Portal webhook ----------
+# For local testing the "portal" is our own mock endpoint (built in Batch 2).
+# Later, replace this with the real Sagicor webhook URL.
+PORTAL_WEBHOOK_URL=http://127.0.0.1:8000/mock-portal/webhook
+PORTAL_WEBHOOK_SECRET=change-me
+WEBHOOK_TIMEOUT_SECONDS=10
+WEBHOOK_MAX_RETRIES=3
+
+# ---------- Security scan ----------
+# false = built-in scanner (EICAR test virus + risky PDF/DOCX content)
+# true  = also use a real ClamAV antivirus server (optional, advanced)
+CLAMAV_ENABLED=false
+CLAMAV_HOST=127.0.0.1
+CLAMAV_PORT=3310
+
+# ---------- OCR (Tesseract) ----------
+# Leave the path as-is if you installed Tesseract in the default folder
+TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+OCR_LANG=eng
+OCR_MIN_CONFIDENCE=50
+
+# ---------- AI / LLM (field extraction) ----------
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+LLM_MODEL=anthropic/claude-haiku-4.5
+LLM_MAX_TOKENS=1500

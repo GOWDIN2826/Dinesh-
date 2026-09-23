@@ -1,0 +1,115 @@
+{
+  "_comment": "Job Letter Validation Rules Repository. Versioned and configurable: edit values here, no code change needed. Change 'version' whenever you edit.",
+  "rule_set": "job_letter",
+  "version": "1.0.0",
+  "effective_date": "2026-09-19",
+
+  "document_category": {
+    "_comment": "Valid if ANY title phrase is found, OR at least min_body_matches different body phrases are found. Rejected if a reject phrase is found and no title phrase.",
+    "accepted_categories": ["Job Letter", "Employment Confirmation Letter"],
+    "title_phrases": [
+      "job letter",
+      "employment letter",
+      "letter of employment",
+      "employment confirmation",
+      "confirmation of employment",
+      "employment verification",
+      "employment reference",
+      "salary confirmation"
+    ],
+    "body_phrases": [
+      "this is to confirm",
+      "this letter confirms",
+      "we confirm that",
+      "is employed",
+      "has been employed",
+      "employed with",
+      "employed by",
+      "employed as",
+      "works for",
+      "works at",
+      "permanent employee",
+      "full-time employee",
+      "job title",
+      "position of",
+      "commenced employment",
+      "date of employment",
+      "start date",
+      "annual salary",
+      "gross salary",
+      "basic salary",
+      "per annum",
+      "per month",
+      "remuneration",
+      "to whom it may concern"
+    ],
+    "min_body_matches": 3,
+    "reject_phrases": [
+      "payslip",
+      "pay slip",
+      "bank statement",
+      "statement of account",
+      "tax invoice",
+      "invoice number",
+      "passport number",
+      "driver's licence",
+      "driver's license",
+      "utility bill",
+      "electricity bill",
+      "water bill"
+    ]
+  },
+
+  "mandatory_fields": [
+    { "label": "Employee Name",         "fields": ["employee_name"] },
+    { "label": "Employer Name",         "fields": ["employer_name"] },
+    { "label": "Addressed To",          "fields": ["addressed_to"] },
+    { "label": "Letter Date",           "fields": ["letter_date"] },
+    { "label": "Job Title",             "fields": ["job_title"] },
+    { "label": "Employment Start Date", "fields": ["employment_start_date"] },
+    { "label": "Income",                "fields": ["income_amount", "income_currency", "income_frequency"] }
+  ],
+
+  "sagicor_bank": {
+    "_comment": "Rule 1 (Batch 4): recognised name variants. match_threshold 0-1 allows small typos / OCR mistakes.",
+    "recognised_names": [
+      "Sagicor Bank",
+      "Sagicor Bank Jamaica",
+      "Sagicor Bank Jamaica Limited",
+      "Sagicor Bank Jamaica Ltd",
+      "Sagicor Bank Jamaica Ltd.",
+      "Sagicor Bank Limited",
+      "Sagicor Bank Ltd"
+    ],
+    "match_threshold": 0.85
+  },
+
+  "letter_validity": {
+    "_comment": "Rule 2 (Batch 4): letter date compared with the submission date.",
+    "max_age_days": 90
+  },
+
+  "income": {
+    "_comment": "Rule 3 (Batch 4): income must have amount, currency and frequency.",
+    "allowed_frequencies": ["per annum", "per month", "per fortnight", "per week"],
+    "annualise_multiplier": {
+      "per annum": 1,
+      "per month": 12,
+      "per fortnight": 26,
+      "per week": 52
+    }
+  },
+
+  "fraud": {
+    "_comment": "Risk / fraud triggers (Batch 4). These are FLAGGED and reported, they do not fail the job. Employer is NOT contacted.",
+    "min_confidence": 0.7,
+    "income_threshold_annual": { "JMD": 20000000, "USD": 150000 },
+    "known_employers": ["ABC Company Ltd"],
+    "known_employers_note": "Leave the list empty [] to switch the 'employer not recognised' check off.",
+    "employer_match_threshold": 0.85,
+    "suspicious_software": [
+      "photoshop", "gimp", "canva", "pixlr", "paint.net",
+      "ilovepdf", "smallpdf", "sejda", "pdfescape", "pdf-xchange editor", "foxit phantompdf"
+    ]
+  }
+}
