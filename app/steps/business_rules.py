@@ -197,15 +197,8 @@ RULES: list[Callable[[ExtractedFields, date, dict], RuleResult]] = [
 def evaluate_business_rules(
     fields: ExtractedFields, submission_date: date, rules: dict
 ) -> list[RuleResult]:
-    """
-    Runs Rule 1 -> 5 in order and STOPS at the first failure (the diagram ends the
-    flow there).  So the returned list is either five passes, or some passes
-    followed by exactly one failure.
-    """
+    """Evaluate and return all five rules in order so every outcome is reportable."""
     results: list[RuleResult] = []
     for rule_function in RULES:
-        result = rule_function(fields, submission_date, rules)
-        results.append(result)
-        if not result.passed:
-            break
+        results.append(rule_function(fields, submission_date, rules))
     return results

@@ -2,10 +2,10 @@
 webhook.py - talks to the Sagicor Bank Portal.
 
 Diagram boxes covered:
-  * "Webhook to Sagicor Bank Portal - QUEUED (Job ID, Status, Details)"
-  * "Exception Handling: every failed check sends a FAILED webhook (job ID,
+  * "Webhook to Sagicor Bank Portal - QUEUED (Status, Details)"
+  * "Exception Handling: every failed check sends a FAILED webhook (
      failure status, error details) to the portal ... then the flow ends."
-  * "Webhook to Sagicor Bank Portal - COMPLETED (Job ID, Completion Status,
+  * "Webhook to Sagicor Bank Portal - COMPLETED (Completion Status,
      Extracted & Verification Details, Validation Summary)"  -> Reviewer Dashboard
 
 Rule: a webhook problem must NEVER crash the pipeline, so send_webhook()
@@ -15,6 +15,7 @@ import logging
 import time
 from datetime import date
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -39,8 +40,13 @@ def send_webhook(job_id: str, payload: dict) -> bool:
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Secret": settings.portal_webhook_secret,  # portal checks this
-        "X-Job-Id": job_id,
     }
+    target = urlsplit(settings.portal_webhook_url)
+    if (
+        target.hostname in {"127.0.0.1", "localhost", "::1"}
+        and target.path.rstrip("/") == "/mock-portal/webhook"
+    ):
+        headers["X-Job-ID"] = job_id
     attempts = max(1, settings.webhook_max_retries)
     last_error = ""
     made = 0
@@ -71,7 +77,7 @@ def send_webhook(job_id: str, payload: dict) -> bool:
         if attempt < attempts:
             time.sleep(2 ** (attempt - 1))
 
-    logger.warning("Webhook %s for job %s failed: %s", status, job_id, last_error)
+    logger.warning("Webhook %s failed: %s", status, last_error)
     db.add_audit(
         job_id, "WEBHOOK", "FAIL",
         f"{status} webhook NOT delivered after {made} attempt(s): {last_error}",
@@ -81,7 +87,7 @@ def send_webhook(job_id: str, payload: dict) -> bool:
 
 def report_queued(job_id: str) -> bool:
     """Webhook right after the job is created:  status = QUEUED."""
-    return send_webhook(job_id, build_queued_payload(job_id))
+    return send_webhook(job_id, build_queued_payload())
 
 
 def report_failure(
@@ -102,7 +108,7 @@ def report_failure(
     Then the flow ends.
     """
     payload = build_error_payload(
-        job_id, error, document_date, fraud_flags, fields, validation_summary
+        error, document_date, fraud_flags, fields, validation_summary
     )
     db.add_audit(job_id, step, "FAIL", f"{error.code.value}: {error.details}")
     db.update_job(
@@ -129,7 +135,7 @@ def report_success(
       3. store the result  (Verification Result & Audit Log Store)
     `job_letter_address_sent_to_sagicor` is only True if the portal really received it.
     """
-    payload = build_success_payload(job_id, fields, fraud_flags, validation_summary)
+    payload = build_success_payload(fields, fraud_flags, validation_summary)
     db.add_audit(
         job_id, "JOB_LETTER_VERIFIED", "PASS", "All business rules passed",
         {"risk_indicators": len(fraud_flags)},

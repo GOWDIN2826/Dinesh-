@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     # ---- Storage ----
     upload_dir: str = "storage/uploads"
+    extracted_text_dir: str = "storage/extracted_text"
     db_path: str = "storage/job_letter.db"
     rules_path: str = "rules/job_letter_rules_v1.json"
 
@@ -55,7 +56,8 @@ class Settings(BaseSettings):
     # ---- LLM / OpenRouter ----
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    llm_model: str = "anthropic/claude-haiku-4.5"
+    llm_model: str = "openai/gpt-4o-mini"
+    llm_fallback_models: str = "anthropic/claude-3.5-haiku,google/gemini-2.0-flash-001"
     llm_max_tokens: int = 1500
 
     # ---- Helpers: turn relative paths into full paths ----
@@ -67,6 +69,10 @@ class Settings(BaseSettings):
     @property
     def upload_path(self) -> Path:
         return self._resolve(self.upload_dir)
+
+    @property
+    def extracted_text_path(self) -> Path:
+        return self._resolve(self.extracted_text_dir)
 
     @property
     def db_file(self) -> Path:
@@ -86,6 +92,7 @@ def get_settings() -> Settings:
     s = Settings()
     # make sure the folders exist
     s.upload_path.mkdir(parents=True, exist_ok=True)
+    s.extracted_text_path.mkdir(parents=True, exist_ok=True)
     s.db_file.parent.mkdir(parents=True, exist_ok=True)
     return s
 

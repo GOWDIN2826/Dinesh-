@@ -17,6 +17,7 @@ How it stays reliable:
 
 To use a different AI provider later (Gemini, Ollama ...) only THIS file changes.
 """
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -28,6 +29,7 @@ from app.config import settings
 from schemas import ErrorCode, ExtractedFields, PipelineError
 
 TOOL_NAME = "record_job_letter_fields"
+logger = logging.getLogger("job_letter.llm_extractor")
 
 SYSTEM_PROMPT = """You extract structured data from the text of an employment / job letter for a bank's document verification system.
 
@@ -166,43 +168,81 @@ def _get_client() -> OpenAI:
     )
 
 
+def _candidate_models() -> list[str]:
+    raw_fallbacks = settings.llm_fallback_models or ""
+    if isinstance(raw_fallbacks, str):
+        fallbacks = [m.strip() for m in raw_fallbacks.split(",") if m.strip()]
+    else:
+        fallbacks = [str(m).strip() for m in raw_fallbacks if str(m).strip()]
+
+    models = [settings.llm_model, *fallbacks]
+    seen = set()
+    result = []
+    for model in models:
+        name = (model or "").strip()
+        if name and name not in seen:
+            result.append(name)
+            seen.add(name)
+    return result
+
+
 # ----------------------------------------------------------------------------
 # main function
 # ----------------------------------------------------------------------------
 def extract_fields(letter_text: str, client: Optional[OpenAI] = None) -> LlmResult:
     client = client or _get_client()
+    active_model = settings.llm_model
+    response = None
+    last_error: Optional[Exception] = None
 
-    try:
-        response = client.chat.completions.create(
-            model=settings.llm_model,
-            max_tokens=settings.llm_max_tokens,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"<letter>\n{letter_text}\n</letter>\n\nExtract the data points.",
-                },
-            ],
-            tools=[{
-                "type": "function",
-                "function": {
-                    "name": TOOL_NAME,
-                    "description": TOOL["description"],
-                    "parameters": TOOL["input_schema"],
-                },
-            }],
-            tool_choice={"type": "function", "function": {"name": TOOL_NAME}},
+    for model_name in _candidate_models():
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                max_tokens=settings.llm_max_tokens,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": f"<letter>\n{letter_text}\n</letter>\n\nExtract the data points.",
+                    },
+                ],
+                tools=[{
+                    "type": "function",
+                    "function": {
+                        "name": TOOL_NAME,
+                        "description": TOOL["description"],
+                        "parameters": TOOL["input_schema"],
+                    },
+                }],
+                tool_choice={"type": "function", "function": {"name": TOOL_NAME}},
+            )
+            active_model = model_name
+            break
+        except AuthenticationError as exc:
+            raise PipelineError(
+                ErrorCode.INTERNAL_PROCESSING_ERROR,
+                details="AI service rejected the API key (check OPENROUTER_API_KEY)",
+            ) from exc
+        except APIError as exc:
+            last_error = exc
+            logger.warning("LLM model %s failed: %s", model_name, exc)
+            if model_name == _candidate_models()[-1]:
+                raise PipelineError(
+                    ErrorCode.INTERNAL_PROCESSING_ERROR,
+                    details=f"AI extraction service unavailable ({type(exc).__name__})",
+                ) from exc
+
+    if response is None:
+        if last_error is not None:
+            raise PipelineError(
+                ErrorCode.INTERNAL_PROCESSING_ERROR,
+                details=f"AI extraction service unavailable ({type(last_error).__name__})",
+            ) from last_error
+        raise PipelineError(
+            ErrorCode.INTERNAL_PROCESSING_ERROR,
+            details="AI extraction service unavailable",
         )
-    except AuthenticationError as exc:
-        raise PipelineError(
-            ErrorCode.INTERNAL_PROCESSING_ERROR,
-            details="AI service rejected the API key (check OPENROUTER_API_KEY)",
-        ) from exc
-    except APIError as exc:
-        raise PipelineError(
-            ErrorCode.INTERNAL_PROCESSING_ERROR,
-            details=f"AI extraction service unavailable ({type(exc).__name__})",
-        ) from exc
 
     tool_calls = response.choices[0].message.tool_calls if response.choices else []
     raw = None
@@ -234,7 +274,7 @@ def extract_fields(letter_text: str, client: Optional[OpenAI] = None) -> LlmResu
     return LlmResult(
         fields=fields,
         unverified_fields=unverified,
-        model=settings.llm_model,
+        model=active_model,
         input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
         output_tokens=getattr(usage, "completion_tokens", 0) or 0,
         reported_confidence=reported,

@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 import database as db
+from app.config import settings
 from schemas import ErrorCode, JobStatus, PipelineError
 from app.steps.business_rules import evaluate_business_rules
 from app.steps.extraction import extract_raw_text
@@ -85,8 +86,12 @@ def process_job(job_id: str) -> None:
 
         # ---- Store Raw Content Extraction (text) ----
         step = "STORE_RAW_CONTENT"
-        db.save_raw_content(job_id, extraction.text, extraction.method)
-        db.add_audit(job_id, step, "PASS", "Raw content stored")
+        text_path = settings.extracted_text_path / f"{file_path.stem}.txt"
+        text_path.write_text(extraction.text, encoding="utf-8")
+        db.add_audit(
+            job_id, step, "PASS", "Raw content stored in local job storage",
+            {"method": extraction.method, "storage_file": str(text_path)},
+        )
 
         # ---- Job Letter Rules Engine  ->  Document Category Valid? ----
         step = "DOCUMENT_CATEGORY_CHECK"
@@ -124,11 +129,12 @@ def process_job(job_id: str) -> None:
         step = "MANDATORY_FIELDS_CHECK"
         missing = engine.check_mandatory_fields(fields)
         if missing:
-            raise PipelineError(
-                ErrorCode.MANDATORY_FIELDS_MISSING,
-                details="Mandatory fields missing: " + ", ".join(missing),
+            db.add_audit(
+                job_id, step, "FAIL",
+                "Mandatory fields missing: " + ", ".join(missing),
             )
-        db.add_audit(job_id, step, "PASS", "All mandatory fields extracted")
+        else:
+            db.add_audit(job_id, step, "PASS", "All mandatory fields extracted")
 
         # ---- Business Rule Validation (Job Letter Rule Set): Rules 1-5 ----
         step = "BUSINESS_RULE_VALIDATION"
@@ -136,10 +142,25 @@ def process_job(job_id: str) -> None:
         results = evaluate_business_rules(fields, submission_date, engine.rules)
         validation_summary = [r.as_summary() for r in results]
         for result in results:
-            if not result.passed:
-                step = result.step              # the failure is logged under this rule's name
-                raise result.error
-            db.add_audit(job_id, result.step, "PASS", result.detail, {"rule": result.rule})
+            db.add_audit(
+                job_id,
+                result.step,
+                "PASS" if result.passed else "FAIL",
+                result.detail,
+                {"rule": result.rule},
+            )
+        first_failed_rule = next((result for result in results if not result.passed), None)
+        if first_failed_rule:
+            step = first_failed_rule.step
+            if first_failed_rule.error is None:
+                raise RuntimeError(f"{first_failed_rule.rule} failed without an error")
+            raise first_failed_rule.error
+        if missing:
+            step = "MANDATORY_FIELDS_CHECK"
+            raise PipelineError(
+                ErrorCode.MANDATORY_FIELDS_MISSING,
+                details="Mandatory fields missing: " + ", ".join(missing),
+            )
         # ---- Flag Fraud / Risk Indicators (reported, no employer contact) ----
         step = "FRAUD_RISK_FLAGS"
         flags = detect_risk_indicators(
@@ -167,7 +188,7 @@ def process_job(job_id: str) -> None:
             validation_summary=validation_summary,
         )
     except Exception as exc:  # anything unexpected still notifies the portal
-        logger.exception("Unexpected error in job %s", job_id)
+        logger.exception("Unexpected error while processing a job")
         report_failure(
             job_id,
             PipelineError(

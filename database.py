@@ -8,66 +8,17 @@ Tables and the diagram box they belong to:
                            step outcome  ("Verification Result & Audit Log Store")
   raw_content           -> "Store Raw Content Extraction (text)"
   verification_results  -> "Verification Result & Audit Log Store"
-  webhook_events        -> what the (mock) Sagicor Bank Portal received; shown on
-                           the "Reviewer Dashboard"
+  webhook_events        -> callback receipts captured by the local mock portal
 """
 import json
+import secrets
 import sqlite3
-import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator, Optional
 
 from app.config import settings
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS jobs (
-    job_id            TEXT PRIMARY KEY,
-    status            TEXT NOT NULL,
-    original_filename TEXT,
-    stored_path       TEXT,
-    file_size         INTEGER,
-    file_hash         TEXT,
-    error_code        TEXT,
-    details           TEXT,
-    submitted_at      TEXT NOT NULL,
-    updated_at        TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id     TEXT NOT NULL,
-    step       TEXT NOT NULL,
-    outcome    TEXT NOT NULL,          -- PASS / FAIL / INFO
-    message    TEXT,
-    data       TEXT,                   -- JSON
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_audit_job ON audit_logs(job_id);
-
-CREATE TABLE IF NOT EXISTS raw_content (
-    job_id     TEXT PRIMARY KEY,
-    method     TEXT,                   -- direct / ocr
-    text       TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS verification_results (
-    job_id       TEXT PRIMARY KEY,
-    status       TEXT NOT NULL,
-    result_json  TEXT NOT NULL,
-    created_at   TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS webhook_events (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id       TEXT NOT NULL,
-    status       TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    received_at  TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_webhook_job ON webhook_events(job_id);
-"""
+from models import SCHEMA_SQL
 
 # Columns of the jobs table that update_job() is allowed to change
 _JOB_UPDATABLE = {
@@ -85,6 +36,7 @@ def get_conn() -> Iterator[sqlite3.Connection]:
     """Open a connection, commit on success, roll back on error, always close."""
     conn = sqlite3.connect(settings.db_file, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode=WAL")
     try:
         yield conn
@@ -97,9 +49,80 @@ def get_conn() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
-    """Create all tables (safe to call every time the app starts)."""
+    """Create tables and move legacy extracted text to per-job local files."""
+    settings.extracted_text_path.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
-        conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA_SQL)
+        webhook_job_id = next(
+            column
+            for column in conn.execute("PRAGMA table_info(webhook_events)")
+            if column["name"] == "job_id"
+        )
+        if webhook_job_id["notnull"]:
+            conn.execute("ALTER TABLE webhook_events RENAME TO webhook_events_legacy")
+            conn.execute(
+                """CREATE TABLE webhook_events (
+                       id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                       job_id       TEXT REFERENCES jobs(job_id) ON DELETE CASCADE,
+                       status       TEXT NOT NULL,
+                       payload_json TEXT NOT NULL,
+                       received_at  TEXT NOT NULL
+                   )"""
+            )
+            conn.execute(
+                """INSERT INTO webhook_events
+                   (id, job_id, status, payload_json, received_at)
+                   SELECT id, job_id, status, payload_json, received_at
+                   FROM webhook_events_legacy"""
+            )
+            conn.execute("DROP TABLE webhook_events_legacy")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_webhook_job ON webhook_events(job_id)"
+            )
+        _backfill_webhook_job_ids(conn)
+        legacy_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'raw_content'"
+        ).fetchone()
+        if legacy_table:
+            rows = conn.execute("SELECT job_id, text FROM raw_content").fetchall()
+            for row in rows:
+                (settings.extracted_text_path / f"{row['job_id']}.txt").write_text(
+                    row["text"] or "", encoding="utf-8"
+                )
+            conn.execute("DROP TABLE raw_content")
+
+
+def _backfill_webhook_job_ids(conn: sqlite3.Connection) -> None:
+    """Link legacy local webhook receipts to matching same-time audit records."""
+    events = conn.execute(
+        """SELECT id, status, received_at
+           FROM webhook_events
+           WHERE job_id IS NULL
+           ORDER BY received_at, id"""
+    ).fetchall()
+    groups: dict[tuple[str, str], list[sqlite3.Row]] = {}
+    for event in events:
+        key = (event["status"], event["received_at"])
+        groups.setdefault(key, []).append(event)
+
+    for (status, received_at), group in groups.items():
+        audits = conn.execute(
+            """SELECT job_id
+               FROM audit_logs
+               WHERE step = 'WEBHOOK'
+                 AND outcome = 'PASS'
+                 AND created_at = ?
+                 AND message LIKE ?
+               ORDER BY id""",
+            (received_at, f"{status} webhook delivered%"),
+        ).fetchall()
+        if len(group) != len(audits):
+            continue
+        for event, audit in zip(group, audits):
+            conn.execute(
+                "UPDATE webhook_events SET job_id = ? WHERE id = ? AND job_id IS NULL",
+                (audit["job_id"], event["id"]),
+            )
 
 
 # ----------------------------------------------------------------------------
@@ -112,10 +135,9 @@ def job_exists(job_id: str) -> bool:
 
 
 def new_job_id() -> str:
-    """Make an id like '9f3c-7ad2' (same style as the diagram's sample)."""
+    """Generate a unique eight-digit numeric job ID."""
     while True:
-        h = uuid.uuid4().hex
-        job_id = f"{h[:4]}-{h[4:8]}"
+        job_id = f"{secrets.randbelow(100_000_000):08d}"
         if not job_exists(job_id):
             return job_id
 
@@ -139,7 +161,7 @@ def create_job(
 
 
 def update_job(job_id: str, **fields: Any) -> None:
-    """update_job('9f3c-7ad2', status='PROCESSING')"""
+    """update_job('00421873', status='PROCESSING')"""
     bad = set(fields) - _JOB_UPDATABLE
     if bad:
         raise ValueError(f"Cannot update column(s): {', '.join(sorted(bad))}")
@@ -158,15 +180,6 @@ def get_job(job_id: str) -> Optional[dict]:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         return dict(row) if row else None
-
-
-def list_jobs(limit: int = 50) -> list[dict]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY submitted_at DESC, rowid DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [dict(r) for r in rows]
 
 
 # ----------------------------------------------------------------------------
@@ -206,33 +219,10 @@ def get_audit(job_id: str) -> list[dict]:
 
 
 # ----------------------------------------------------------------------------
-# Raw extracted text
-# ----------------------------------------------------------------------------
-def save_raw_content(job_id: str, text: str, method: str) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO raw_content (job_id, method, text, created_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(job_id) DO UPDATE SET
-                   method = excluded.method,
-                   text = excluded.text,
-                   created_at = excluded.created_at""",
-            (job_id, method, text, _now()),
-        )
-
-
-def get_raw_content(job_id: str) -> Optional[dict]:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM raw_content WHERE job_id = ?", (job_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
-
-# ----------------------------------------------------------------------------
 # Final verification result
 # ----------------------------------------------------------------------------
 def save_result(job_id: str, status: str, payload: dict) -> None:
+    result = {**payload, "job_id": job_id}
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO verification_results (job_id, status, result_json, created_at)
@@ -241,7 +231,7 @@ def save_result(job_id: str, status: str, payload: dict) -> None:
                    status = excluded.status,
                    result_json = excluded.result_json,
                    created_at = excluded.created_at""",
-            (job_id, status, json.dumps(payload, default=str), _now()),
+            (job_id, status, json.dumps(result, default=str), _now()),
         )
 
 
@@ -250,35 +240,20 @@ def get_result(job_id: str) -> Optional[dict]:
         row = conn.execute(
             "SELECT result_json FROM verification_results WHERE job_id = ?", (job_id,)
         ).fetchone()
-    return json.loads(row["result_json"]) if row else None
+    if row is None:
+        return None
+    result = json.loads(row["result_json"])
+    result["job_id"] = job_id
+    return result
 
 
 # ----------------------------------------------------------------------------
 # Mock Sagicor Bank Portal - received webhooks (Reviewer Dashboard data)
 # ----------------------------------------------------------------------------
-def save_webhook_event(job_id: str, status: str, payload: dict) -> None:
+def save_webhook_event(job_id: Optional[str], status: str, payload: dict) -> None:
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO webhook_events (job_id, status, payload_json, received_at)
                VALUES (?, ?, ?, ?)""",
             (job_id, status, json.dumps(payload, default=str), _now()),
         )
-
-
-def list_webhook_events(job_id: Optional[str] = None, limit: int = 200) -> list[dict]:
-    with get_conn() as conn:
-        if job_id:
-            rows = conn.execute(
-                "SELECT * FROM webhook_events WHERE job_id = ? ORDER BY id DESC LIMIT ?",
-                (job_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM webhook_events ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
-    result = []
-    for r in rows:
-        item = dict(r)
-        item["payload"] = json.loads(item.pop("payload_json"))
-        result.append(item)
-    return result

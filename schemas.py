@@ -228,17 +228,15 @@ def format_salary(fields: ExtractedFields) -> Optional[str]:
     return f"{fields.income_currency} {text}" if fields.income_currency else text
 
 
-def build_queued_payload(job_id: str) -> dict:
-    """Webhook right after upload:  QUEUED (Job ID, Status, Details)."""
+def build_queued_payload() -> dict:
+    """Webhook right after upload:  QUEUED (Status, Details)."""
     return {
-        "job_id": job_id,
         "status": JobStatus.QUEUED.value,
         "details": "Job received and queued for processing",
     }
 
 
 def build_success_payload(
-    job_id: str,
     fields: ExtractedFields,
     fraud_flags: list[FraudFlag],
     validation_summary: list[dict],
@@ -254,7 +252,6 @@ def build_success_payload(
             ],
         }
     return {
-        "job_id": job_id,
         "status": JobStatus.COMPLETED.value,
         "details": "Job Letter processed successfully",
         "job_letter_address_sent_to_sagicor": True,
@@ -279,7 +276,6 @@ def build_success_payload(
 
 
 def build_error_payload(
-    job_id: str,
     error: PipelineError,
     document_date: Optional[date] = None,
     fraud_flags: Optional[list[FraudFlag]] = None,
@@ -317,7 +313,6 @@ def build_error_payload(
         }
 
     return {
-        "job_id": job_id,
         "status": JobStatus.FAILED.value,
         "http_status_code": error.http_status_code,
         "details": error.details,
