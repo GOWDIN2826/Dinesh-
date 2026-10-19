@@ -10,7 +10,6 @@ pipeline.py - the COMPLETE workflow diagram, top to bottom, in one function.
   -> Job Letter Rules Engine ...... Document Category Valid?
   -> AI Field Extraction (LLM) .... Mandatory Fields Extracted?
   -> Business Rule Validation ..... Rules 1-5
-  -> Flag Fraud / Risk Indicators
   -> Job Letter Verified
   -> Webhook COMPLETED -> Verification Result & Audit Log Store -> End
 
@@ -28,7 +27,6 @@ from schemas import ErrorCode, JobStatus, PipelineError
 from app.steps.business_rules import evaluate_business_rules
 from app.steps.extraction import extract_raw_text
 from app.steps.file_validation import validate_file_format
-from app.steps.fraud import detect_risk_indicators
 from app.steps.llm_extractor import extract_fields
 from app.steps.metadata import extract_file_metadata
 from app.steps.rules_engine import get_rules_engine
@@ -119,7 +117,6 @@ def process_job(job_id: str) -> None:
             {
                 "fields": fields.model_dump(mode="json"),
                 "unverified_fields": llm.unverified_fields,
-                "reported_confidence": llm.reported_confidence,
                 "model": llm.model,
                 "tokens": {"input": llm.input_tokens, "output": llm.output_tokens},
             },
@@ -161,22 +158,9 @@ def process_job(job_id: str) -> None:
                 ErrorCode.MANDATORY_FIELDS_MISSING,
                 details="Mandatory fields missing: " + ", ".join(missing),
             )
-        # ---- Flag Fraud / Risk Indicators (reported, no employer contact) ----
-        step = "FRAUD_RISK_FLAGS"
-        flags = detect_risk_indicators(
-            fields, meta, extraction.ocr_confidence, llm.unverified_fields, engine.rules
-        )
-        if flags:
-            db.add_audit(
-                job_id, step, "INFO", f"{len(flags)} risk indicator(s) flagged for the reviewer",
-                {"flags": [f.model_dump(mode="json") for f in flags]},
-            )
-        else:
-            db.add_audit(job_id, step, "PASS", "No fraud / risk indicators found")
-
         # ---- Job Letter Verified -> Webhook COMPLETED -> Audit Log Store -> End ----
         step = "JOB_LETTER_VERIFIED"
-        report_success(job_id, fields, flags, validation_summary)
+        report_success(job_id, fields, validation_summary)
 
     except PipelineError as err:
         report_failure(

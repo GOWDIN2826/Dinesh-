@@ -98,18 +98,5 @@
       "per fortnight": 26,
       "per week": 52
     }
-  },
-
-  "fraud": {
-    "_comment": "Risk / fraud triggers (Batch 4). These are FLAGGED and reported, they do not fail the job. Employer is NOT contacted.",
-    "min_confidence": 0.7,
-    "income_threshold_annual": { "JMD": 20000000, "USD": 150000 },
-    "known_employers": ["ABC Company Ltd"],
-    "known_employers_note": "Leave the list empty [] to switch the 'employer not recognised' check off.",
-    "employer_match_threshold": 0.85,
-    "suspicious_software": [
-      "photoshop", "gimp", "canva", "pixlr", "paint.net",
-      "ilovepdf", "smallpdf", "sejda", "pdfescape", "pdf-xchange editor", "foxit phantompdf"
-    ]
   }
 }

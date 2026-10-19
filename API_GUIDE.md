@@ -13,7 +13,7 @@ The configured client URL is `PORTAL_WEBHOOK_URL`; the mock URL is only for loca
 
 - **Security scan:** screens files for the EICAR test signature, executable files disguised as documents, active PDF content, unsafe DOCX archive contents, and (when enabled) ClamAV findings. It reduces malware and parser risk; the built-in scan is not a substitute for production antivirus.
 - **File format validation:** identifies known binary types from file signatures and rejects a known filename extension that disagrees with the content. This prevents trusting a client-supplied extension alone. The existing reader also accepts readable text input, although the portal currently limits its picker to PDF/JPEG/PNG/DOCX.
-- **Metadata extraction:** records a SHA-256 digest and document properties (such as PDF creator/dates, DOCX author/revision, or image software metadata). This supports traceability and tampering-risk review; metadata alone does not prove authenticity.
+- **Metadata extraction:** records a SHA-256 digest and document properties (such as PDF creator/dates, DOCX author/revision, or image software metadata). This supports traceability; metadata alone does not prove authenticity.
 - **Text extraction:** reads a PDF/DOCX text layer where possible, otherwise applies OCR. Source text is truncated at 30,000 characters to bound downstream processing and is written to a randomly named file under `storage/extracted_text/`. It is not returned to the browser or written to SQLite. The audit trail stores processing metadata, not the raw text.
 
 ## LLM token budget

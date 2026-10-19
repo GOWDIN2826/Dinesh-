@@ -6,7 +6,6 @@ workflow diagram:
   * ErrorCode      -> every red "Raise Exception / Return Error" box
   * PipelineError  -> how any step stops the flow and returns an error
   * ExtractedFields-> the "Extracted Data Points" list (LLM output)
-  * FraudIndicator -> "Risk / Fraud Triggers"
   * build_*_payload-> the JSON sent to the Sagicor Bank Portal webhook
                       (matches "Sample success result" / "Sample error result")
 """
@@ -142,21 +141,6 @@ class PipelineError(Exception):
 
 
 # ----------------------------------------------------------------------------
-# Fraud / risk indicators  ("Risk / Fraud Triggers")
-# ----------------------------------------------------------------------------
-class FraudIndicator(str, Enum):
-    LOW_EXTRACTION_CONFIDENCE = "LOW_EXTRACTION_CONFIDENCE"
-    DOCUMENT_TAMPERING_SUSPECTED = "DOCUMENT_TAMPERING_SUSPECTED"
-    EMPLOYER_NOT_RECOGNISED = "EMPLOYER_NOT_RECOGNISED"
-    INCOME_ABOVE_THRESHOLD = "INCOME_ABOVE_THRESHOLD"
-
-
-class FraudFlag(BaseModel):
-    indicator: FraudIndicator
-    description: str
-
-
-# ----------------------------------------------------------------------------
 # Extracted data points  ("AI Document Processing & Field Extraction (LLM)")
 # ----------------------------------------------------------------------------
 def _to_date_or_none(value: Any) -> Optional[date]:
@@ -189,9 +173,6 @@ class ExtractedFields(BaseModel):
     income_amount: Optional[float] = None
     income_currency: Optional[str] = None        # e.g. JMD, USD
     income_frequency: Optional[str] = None       # per annum / per month / ...
-    # LLM self-reported confidence 0.0 - 1.0 (used by the fraud check)
-    confidence: float = 0.0
-
     @field_validator("letter_date", "employment_start_date", mode="before")
     @classmethod
     def _dates(cls, v: Any) -> Optional[date]:
@@ -206,15 +187,6 @@ class ExtractedFields(BaseModel):
             return float(str(v).replace(",", "").strip())
         except ValueError:
             return None
-
-    @field_validator("confidence", mode="before")
-    @classmethod
-    def _confidence(cls, v: Any) -> float:
-        try:
-            return max(0.0, min(1.0, float(v)))
-        except (TypeError, ValueError):
-            return 0.0
-
 
 # ----------------------------------------------------------------------------
 # Webhook payload builders  (match the diagram's sample JSON exactly)
@@ -238,24 +210,12 @@ def build_queued_payload() -> dict:
 
 def build_success_payload(
     fields: ExtractedFields,
-    fraud_flags: list[FraudFlag],
     validation_summary: list[dict],
 ) -> dict:
     """Webhook at the end:  COMPLETED  (see 'Sample success result')."""
-    fraud = None
-    if fraud_flags:
-        fraud = {
-            "flagged": True,
-            "indicators": [
-                {"indicator": f.indicator.value, "description": f.description}
-                for f in fraud_flags
-            ],
-        }
     return {
         "status": JobStatus.COMPLETED.value,
         "details": "Job Letter processed successfully",
-        "job_letter_address_sent_to_sagicor": True,
-        "fraud_detection": fraud,
         "extracted_data": {
             "employee_name": fields.employee_name,
             "employer_name": fields.employer_name,
@@ -278,20 +238,10 @@ def build_success_payload(
 def build_error_payload(
     error: PipelineError,
     document_date: Optional[date] = None,
-    fraud_flags: Optional[list[FraudFlag]] = None,
     fields: Optional[ExtractedFields] = None,
     validation_summary: Optional[list[dict]] = None,
 ) -> dict:
     """Webhook on any failed check:  FAILED  (see 'Sample error result')."""
-    fraud = None
-    if fraud_flags:
-        fraud = {
-            "flagged": True,
-            "indicators": [
-                {"indicator": f.indicator.value, "description": f.description}
-                for f in fraud_flags
-            ],
-        }
     extracted_data = None
     if fields is not None:
         extracted_data = {
@@ -320,6 +270,4 @@ def build_error_payload(
         "document_date": document_date.isoformat() if document_date else None,
         "extracted_data": extracted_data,
         "validation_summary": validation_summary or [],
-        "job_letter_address_sent_to_sagicor": False,
-        "fraud_detection": fraud,
     }

@@ -23,7 +23,6 @@ import database as db
 from app.config import settings
 from schemas import (
     ExtractedFields,
-    FraudFlag,
     JobStatus,
     PipelineError,
     build_error_payload,
@@ -95,7 +94,6 @@ def report_failure(
     error: PipelineError,
     step: str = "PIPELINE",
     document_date: Optional[date] = None,
-    fraud_flags: Optional[list[FraudFlag]] = None,
     fields: Optional[ExtractedFields] = None,
     validation_summary: Optional[list[dict]] = None,
 ) -> dict:
@@ -107,9 +105,7 @@ def report_failure(
       4. send the FAILED webhook  ->  Reviewer Dashboard
     Then the flow ends.
     """
-    payload = build_error_payload(
-        error, document_date, fraud_flags, fields, validation_summary
-    )
+    payload = build_error_payload(error, document_date, fields, validation_summary)
     db.add_audit(job_id, step, "FAIL", f"{error.code.value}: {error.details}")
     db.update_job(
         job_id,
@@ -125,20 +121,18 @@ def report_failure(
 def report_success(
     job_id: str,
     fields: ExtractedFields,
-    fraud_flags: list[FraudFlag],
     validation_summary: list[dict],
 ) -> dict:
     """
-    "Job Letter Verified - All business rules passed"  ->  COMPLETED webhook  ->  End.
+    "Job Letter Verified - All business rules passed"  ->  COMPLETED webhook  -> End.
       1. mark the job COMPLETED and write the audit log
-      2. send the COMPLETED webhook (extracted data + validation summary + fraud flags)
+      2. send the COMPLETED webhook (extracted data + validation summary)
       3. store the result  (Verification Result & Audit Log Store)
     `job_letter_address_sent_to_sagicor` is only True if the portal really received it.
     """
-    payload = build_success_payload(fields, fraud_flags, validation_summary)
+    payload = build_success_payload(fields, validation_summary)
     db.add_audit(
         job_id, "JOB_LETTER_VERIFIED", "PASS", "All business rules passed",
-        {"risk_indicators": len(fraud_flags)},
     )
     db.update_job(
         job_id,
@@ -146,8 +140,7 @@ def report_success(
         error_code=None,
         details=payload["details"],
     )
-
     delivered = send_webhook(job_id, payload)
-    payload["job_letter_address_sent_to_sagicor"] = bool(delivered and fields.employer_address)
+    delivered = send_webhook(job_id, payload)
     db.save_result(job_id, JobStatus.COMPLETED.value, payload)
     return payload

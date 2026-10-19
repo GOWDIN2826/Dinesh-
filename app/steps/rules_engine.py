@@ -21,7 +21,7 @@ from schemas import ErrorCode, ExtractedFields, PipelineError
 
 REQUIRED_SECTIONS = (
     "document_category", "mandatory_fields", "sagicor_bank",
-    "letter_validity", "income", "fraud",
+    "letter_validity", "income",
 )
 
 

@@ -36,8 +36,6 @@ class JobVerificationResponse(BaseModel):
     document_date: Optional[str] = None
     extracted_data: Optional[dict[str, Any]] = None
     validation_summary: list[dict[str, Any]] = Field(default_factory=list)
-    job_letter_address_sent_to_sagicor: Optional[bool] = None
-    fraud_detection: Optional[dict[str, Any]] = None
 
 
 class VerificationResultRecord(BaseModel):
@@ -73,8 +71,6 @@ class WebhookCallback(BaseModel):
     document_date: Optional[str] = None
     extracted_data: Optional[dict[str, Any]] = None
     validation_summary: list[dict[str, Any]] = Field(default_factory=list)
-    job_letter_address_sent_to_sagicor: Optional[bool] = None
-    fraud_detection: Optional[dict[str, Any]] = None
 
 
 SCHEMA_SQL = """
